@@ -103,14 +103,21 @@ Generará los archivos estáticos listos para desplegar en la carpeta `./out`.
 
 ---
 
-## 📦 Despliegue Automatizado en GitHub Pages
+## 📦 Despliegue en GitHub Pages
 
-El proyecto incluye un flujo de integración y despliegue continuo configurado en `.github/workflows/deploy.yml`:
+El proyecto cuenta con un script de despliegue optimizado para **GitHub Pages** (vía rama `gh-pages`):
 
-1. Al realizar `git push origin main`, GitHub Actions detecta el cambio.
-2. Configura automáticamente el `basePath` según el nombre del repositorio.
-3. Ejecuta `next build` en modo exportación estática (`output: 'export'`).
-4. Publica el contenido de `./out` en GitHub Pages.
+1. **Desplegar con un solo comando:**
+   ```bash
+   npm run deploy
+   ```
+   Este comando compila la exportación estática con Turbopack configurando el `basePath: '/cv'`, genera el archivo `.nojekyll` y publica automáticamente la versión compilada en la rama `gh-pages` de tu repositorio.
+
+2. **Configuración en GitHub:**
+   - Ve a tu repositorio en GitHub: **Settings** -> **Pages**.
+   - En **Source**, selecciona **Deploy from a branch**.
+   - Selecciona la rama **`gh-pages`** y carpeta **`/(root)`**, luego guarda.
+   - ¡Tu web quedará activa en `https://martinrot.github.io/cv/`!
 
 ---
 
