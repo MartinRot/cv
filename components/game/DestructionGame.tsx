@@ -100,8 +100,8 @@ export function DestructionGame({
   const [isMuted, setIsMuted] = useState(false);
   const [message, setMessage] = useState<string | null>(
     lang === "es"
-      ? "¡Usa [A][D] para moverte, [W]/[Espacio] para saltar (Doble Salto disponible) y Click para disparar!"
-      : "Use [A][D] to move, [W]/[Space] to jump (Double Jump available), and Click to shoot!"
+      ? "¡Usa [A][D] para moverte, [W]/[Espacio] saltar, [S]/[↓] bajar tarjetas o scrollear y Click para disparar!"
+      : "Use [A][D] to move, [W]/[Space] to jump, [S]/[↓] to drop down/scroll, and Click to shoot!"
   );
 
   // Player physics with Double Jump and Jetpack
@@ -122,6 +122,7 @@ export function DestructionGame({
   });
 
   const hasSpawnedRef = useRef(false);
+  const dropThroughTimerRef = useRef(0);
 
   // Controls state
   const keysRef = useRef<{ [key: string]: boolean }>({});
@@ -268,6 +269,29 @@ export function DestructionGame({
     }
   }, [addFloatingText]);
 
+  // Drop Down / Fast Fall Action
+  const triggerDropDown = useCallback(() => {
+    const player = playerRef.current;
+    dropThroughTimerRef.current = 16;
+    player.isGrounded = false;
+    player.y += 6;
+    player.vy = Math.max(player.vy, 6);
+
+    // Dust effect under feet
+    for (let i = 0; i < 6; i++) {
+      particlesRef.current.push({
+        x: player.x + player.width / 2 + (Math.random() - 0.5) * 12,
+        y: player.y + player.height,
+        vx: (Math.random() - 0.5) * 4,
+        vy: -Math.random() * 2 - 1,
+        color: "#94a3b8",
+        size: 3,
+        life: 0.35,
+        maxLife: 0.35
+      });
+    }
+  }, []);
+
   // Shoot Weapon
   const shoot = useCallback(() => {
     const player = playerRef.current;
@@ -343,6 +367,12 @@ export function DestructionGame({
         triggerJump();
       }
 
+      // Check if drop down key was just pressed
+      const isDownKey = e.code === "KeyS" || e.code === "ArrowDown";
+      if (isDownKey && !keysRef.current[e.code]) {
+        triggerDropDown();
+      }
+
       keysRef.current[e.code] = true;
       if (isJumpKey) {
         playerRef.current.jumpKeyHeld = true;
@@ -372,11 +402,32 @@ export function DestructionGame({
       window.removeEventListener("keydown", handleKeyDown);
       window.removeEventListener("keyup", handleKeyUp);
     };
-  }, [isActive, isMuted, onClose, triggerJump, triggerSuperBoost]);
+  }, [isActive, isMuted, onClose, triggerJump, triggerDropDown, triggerSuperBoost]);
 
-  // Mouse aim handlers
+  // Mouse aim and selection prevention handlers
   useEffect(() => {
     if (!isActive) return;
+
+    // Disable text selection and dragging across the page during Chaos Mode
+    const originalUserSelect = document.body.style.userSelect;
+    const originalWebkitUserSelect = (document.body.style as unknown as { webkitUserSelect: string }).webkitUserSelect;
+    document.body.style.userSelect = "none";
+    (document.body.style as unknown as { webkitUserSelect: string }).webkitUserSelect = "none";
+    document.body.classList.add("select-none");
+
+    // Clear any existing active text selection
+    window.getSelection()?.removeAllRanges();
+
+    const handleSelectStart = (e: Event) => {
+      e.preventDefault();
+    };
+
+    const handleDragStart = (e: DragEvent) => {
+      e.preventDefault();
+    };
+
+    document.addEventListener("selectstart", handleSelectStart);
+    document.addEventListener("dragstart", handleDragStart);
 
     const handleMouseMove = (e: MouseEvent) => {
       mouseRef.current.x = e.clientX;
@@ -386,6 +437,12 @@ export function DestructionGame({
     const handleMouseDown = (e: MouseEvent) => {
       if (e.button === 0) {
         mouseRef.current.isDown = true;
+        // Don't prevent default on HUD interactive buttons/links
+        const target = e.target as HTMLElement | null;
+        const isHudInteractive = target?.closest('button, [role="button"], a');
+        if (!isHudInteractive) {
+          e.preventDefault();
+        }
       }
     };
 
@@ -400,6 +457,12 @@ export function DestructionGame({
     window.addEventListener("mouseup", handleMouseUp);
 
     return () => {
+      document.body.style.userSelect = originalUserSelect;
+      (document.body.style as unknown as { webkitUserSelect: string }).webkitUserSelect = originalWebkitUserSelect;
+      document.body.classList.remove("select-none");
+
+      document.removeEventListener("selectstart", handleSelectStart);
+      document.removeEventListener("dragstart", handleDragStart);
       window.removeEventListener("mousemove", handleMouseMove);
       window.removeEventListener("mousedown", handleMouseDown);
       window.removeEventListener("mouseup", handleMouseUp);
@@ -469,7 +532,7 @@ export function DestructionGame({
 
       // Collect all solid platforms: destructibles, tech chips, buttons, badges, links & headings
       const platformNodes = document.querySelectorAll<HTMLElement>(
-        'main [data-destructible="true"], main [data-platform="true"], main button, main a.inline-flex, main h2, main h3, header'
+        'main [data-destructible="true"], main [data-platform="true"], main button, main a.inline-flex, main h2, main h3'
       );
       const platforms: {
         id: string;
@@ -494,10 +557,11 @@ export function DestructionGame({
 
         const rect = node.getBoundingClientRect();
 
-        // Only include platforms with reasonable width/height near viewport
+        // Only include platforms with reasonable width/height near viewport and not jammed above ceiling
         if (
           rect.width >= 20 &&
           rect.height >= 10 &&
+          rect.top >= 25 &&
           rect.bottom > -80 &&
           rect.top < window.innerHeight + 80
         ) {
@@ -509,9 +573,10 @@ export function DestructionGame({
       const player = playerRef.current;
       const keys = keysRef.current;
 
-      // Horizontal movement
+      // Horizontal and Vertical movement
       const moveLeft = keys["KeyA"] || keys["ArrowLeft"];
       const moveRight = keys["KeyD"] || keys["ArrowRight"];
+      const moveDown = keys["KeyS"] || keys["ArrowDown"];
 
       const accel = 1.3;
       const maxSpeed = 5.8;
@@ -530,8 +595,25 @@ export function DestructionGame({
         if (Math.abs(player.vx) < 0.1) player.vx = 0;
       }
 
-      // Jetpack / Hover thruster when holding jump in mid-air
-      if (player.jumpKeyHeld && !player.isGrounded && player.vy > -5 && player.jetpackFuel > 0) {
+      // Fast fall / plunge when holding Down in mid-air
+      if (moveDown) {
+        player.vy = Math.min(player.vy + 1.2, 15);
+        if (Math.random() > 0.4) {
+          particlesRef.current.push({
+            x: player.x + player.width / 2 + (Math.random() - 0.5) * 8,
+            y: player.y + 4,
+            vx: (Math.random() - 0.5) * 2,
+            vy: -Math.random() * 2 - 1,
+            color: "#94a3b8",
+            size: 2.5,
+            life: 0.2,
+            maxLife: 0.2
+          });
+        }
+      }
+
+      // Jetpack / Hover thruster when holding jump in mid-air (only when not intentionally holding Down)
+      if (!moveDown && player.jumpKeyHeld && !player.isGrounded && player.vy > -5 && player.jetpackFuel > 0) {
         player.vy -= 0.65;
         player.jetpackFuel--;
 
@@ -563,27 +645,37 @@ export function DestructionGame({
       let landedPlatform: typeof platforms[0] | null = null;
       let highestLandingY = Infinity;
 
-      for (const p of platforms) {
-        const pTop = p.rect.top;
-        const pLeft = p.rect.left;
-        const pRight = p.rect.right;
+      // Countdown drop-through timer
+      if (dropThroughTimerRef.current > 0) {
+        dropThroughTimerRef.current--;
+      }
 
-        const playerBottom = player.y + player.height;
-        const nextPlayerBottom = nextY + player.height;
+      // Allow landing only when not holding Down and not in drop-through cooldown
+      const canLandOnPlatforms = !moveDown && dropThroughTimerRef.current <= 0;
 
-        const isHorizontallyOverlapping =
-          nextX + player.width > pLeft + 4 && nextX < pRight - 4;
+      if (canLandOnPlatforms) {
+        for (const p of platforms) {
+          const pTop = p.rect.top;
+          const pLeft = p.rect.left;
+          const pRight = p.rect.right;
 
-        if (
-          isHorizontallyOverlapping &&
-          playerBottom <= pTop + 14 &&
-          nextPlayerBottom >= pTop &&
-          player.vy >= 0
-        ) {
-          // Choose the highest platform underneath player
-          if (pTop < highestLandingY) {
-            highestLandingY = pTop;
-            landedPlatform = p;
+          const playerBottom = player.y + player.height;
+          const nextPlayerBottom = nextY + player.height;
+
+          const isHorizontallyOverlapping =
+            nextX + player.width > pLeft + 4 && nextX < pRight - 4;
+
+          if (
+            isHorizontallyOverlapping &&
+            playerBottom <= pTop + 14 &&
+            nextPlayerBottom >= pTop &&
+            player.vy >= 0
+          ) {
+            // Choose the highest platform underneath player
+            if (pTop < highestLandingY) {
+              highestLandingY = pTop;
+              landedPlatform = p;
+            }
           }
         }
       }
@@ -596,8 +688,10 @@ export function DestructionGame({
         player.jetpackFuel = 45; // Refuel jetpack!
       }
 
-      // Floor collision (Bottom of viewport)
+      // Ceiling and floor boundaries
+      const ceilingY = 6;
       const floorY = canvas.height - player.height - 4;
+
       if (nextY >= floorY) {
         player.y = floorY;
         player.vy = 0;
@@ -605,17 +699,48 @@ export function DestructionGame({
         player.jumpsLeft = 2; // Restore Double Jump on floor!
         player.jetpackFuel = 45;
       } else if (!player.isGrounded) {
-        player.y = nextY;
+        if (nextY <= ceilingY) {
+          player.y = ceilingY;
+          if (player.vy < 0) {
+            player.vy = 1; // Bump head on ceiling!
+            // Small ceiling dust particles
+            for (let i = 0; i < 3; i++) {
+              particlesRef.current.push({
+                x: player.x + player.width / 2 + (Math.random() - 0.5) * 12,
+                y: ceilingY,
+                vx: (Math.random() - 0.5) * 3,
+                vy: Math.random() * 2 + 1,
+                color: "#cbd5e1",
+                size: 2.5,
+                life: 0.25,
+                maxLife: 0.25
+              });
+            }
+          }
+        } else {
+          player.y = nextY;
+        }
+      }
+
+      // Absolute safety clamp on Y to never get stuck off-screen
+      if (player.y < ceilingY) {
+        player.y = ceilingY;
+        if (player.vy < 0) player.vy = 1;
       }
 
       // Screen boundaries X
       player.x = Math.max(8, Math.min(canvas.width - player.width - 8, nextX));
 
       // SMART AUTO-SCROLL CAMERA: Move webpage view if player reaches top/bottom edge
-      if (player.y < 160 && player.vy < 0) {
-        window.scrollBy({ top: -7, behavior: "auto" });
-      } else if (player.y > canvas.height - 180 && player.vy > 0) {
-        window.scrollBy({ top: 7, behavior: "auto" });
+      const isNearTop = player.y < 180;
+      const isNearBottom = player.y > canvas.height - 220;
+      const moveUp = keys["KeyW"] || keys["ArrowUp"] || keys["Space"];
+
+      if (isNearTop && (player.vy < 0 || moveUp)) {
+        window.scrollBy({ top: -8, behavior: "auto" });
+      } else if ((isNearBottom && (moveDown || dropThroughTimerRef.current > 0)) || (player.y > canvas.height - 180 && player.vy > 0)) {
+        const scrollStep = moveDown ? 13 : 8;
+        window.scrollBy({ top: scrollStep, behavior: "auto" });
       }
 
       // Shooting cooldown and auto-fire
@@ -1105,6 +1230,12 @@ export function DestructionGame({
         }}
         onMoveRight={(active) => {
           keysRef.current["ArrowRight"] = active;
+        }}
+        onMoveDown={(active) => {
+          keysRef.current["ArrowDown"] = active;
+        }}
+        onDropDown={() => {
+          triggerDropDown();
         }}
         onJump={() => {
           triggerJump();
